@@ -15,16 +15,15 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 ADMIN_ROLE_ID = int(os.getenv('ADMIN_ROLE_ID', 0))
 
-# Каналы для модерации (жестко заданы)
+# Каналы для модерации
 MOD_CHANNEL_IDS = [1529234469842587678, 1532365777712447568]
-# Лог-канал (жестко задан)
 LOG_CHANNEL_ID = 1530954702320308326
 
 if not TOKEN:
     print("❌ Ошибка: не задан DISCORD_TOKEN")
     sys.exit(1)
 
-# ---------- Загрузка запрещённых доменов ----------
+# ---------- Загрузка запрещённых доменов (оставляем для совместимости) ----------
 DOMAINS_FILE = "banned_domains.txt"
 banned_domains = set()
 
@@ -55,7 +54,8 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-URL_PATTERN = re.compile(r'(https?://\S+|www\.\S+)')
+# Регулярка для поиска любых ссылок
+URL_PATTERN = re.compile(r'(https?://[^\s]+|www\.[^\s]+)', re.IGNORECASE)
 
 # ---------- Вспомогательные функции ----------
 async def log_action(message: discord.Message, reason: str, action: str = "Удалено"):
@@ -76,7 +76,12 @@ async def log_action(message: discord.Message, reason: str, action: str = "Уд�
     except:
         pass
 
+def contains_any_link(text: str) -> bool:
+    """Проверяет, есть ли в тексте любая ссылка."""
+    return bool(URL_PATTERN.search(text))
+
 def contains_banned_domain(text: str) -> bool:
+    """Оставляем для совместимости (можно удалить, если не нужно)."""
     urls = URL_PATTERN.findall(text.lower())
     for url in urls:
         for domain in banned_domains:
@@ -113,7 +118,11 @@ async def on_message(message: discord.Message):
     content = message.content
     reason = None
 
-    if contains_banned_domain(content):
+    # ---- НОВАЯ ПРОВЕРКА: любая ссылка ----
+    if contains_any_link(content):
+        reason = "Публикация ссылки (запрещено)"
+    # ---- Остальные проверки (можно оставить, но они уже не нужны) ----
+    elif contains_banned_domain(content):
         reason = "Запрещённый домен"
     elif is_invite_link(content):
         reason = "Пригласительная ссылка Discord"
@@ -122,7 +131,6 @@ async def on_message(message: discord.Message):
 
     if reason:
         try:
-            # Удаляем сообщение
             await message.delete()
             await log_action(message, reason, action="Мут + удаление")
 
@@ -149,7 +157,7 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# ---------- Команды для управления доменами ----------
+# ---------- Команды для управления доменами (оставляем) ----------
 @bot.tree.command(name="add_domain", description="Добавить домен в чёрный список (только админ)")
 @app_commands.default_permissions(administrator=True)
 async def add_domain(interaction: discord.Interaction, domain: str):
@@ -189,18 +197,21 @@ async def list_domains(interaction: discord.Interaction):
         domains_text = domains_text[:1900] + "..."
     await interaction.response.send_message(f"📋 **Запрещённые домены:**\n{domains_text}", ephemeral=True)
 
-# ---------- Веб-сервер для health check ----------
+# ---------- Веб-сервер для health check (исправлен) ----------
+PORT = int(os.getenv('PORT', 8080))
+
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
 async def start_web():
     app = web.Application()
+    app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host='0.0.0.0', port=8080)
+    site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
     await site.start()
-    print("🌐 Health check на порту 8080")
+    print(f"🌐 Health check доступен по адресам: / и /health на порту {PORT}")
     await asyncio.Event().wait()
 
 @bot.event
