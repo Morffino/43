@@ -1,0 +1,7 @@
+bit.ly
+goo.gl
+tinyurl.com
+vk.com
+youtube.com   # если хотите запретить видео
+discord.gg    # запрет приглашений
+twitch.tv     # запрет ссылок на стримы
