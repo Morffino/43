@@ -13,6 +13,7 @@ load_dotenv()
 
 # ---------- Конфигурация ----------
 TOKEN = os.getenv('DISCORD_TOKEN')
+OWNER_ID = int(os.getenv('OWNER_ID', 0))           # <-- Владелец бота
 ADMIN_ROLE_ID = int(os.getenv('ADMIN_ROLE_ID', 0))
 
 # Каналы для модерации
@@ -23,7 +24,10 @@ if not TOKEN:
     print("❌ Ошибка: не задан DISCORD_TOKEN")
     sys.exit(1)
 
-# ---------- Загрузка запрещённых доменов (оставляем для совместимости) ----------
+if OWNER_ID == 0:
+    print("⚠️ OWNER_ID не задан – команды будут недоступны")
+
+# ---------- Загрузка запрещённых доменов ----------
 DOMAINS_FILE = "banned_domains.txt"
 banned_domains = set()
 
@@ -54,7 +58,6 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Регулярка для поиска любых ссылок
 URL_PATTERN = re.compile(r'(https?://[^\s]+|www\.[^\s]+)', re.IGNORECASE)
 
 # ---------- Вспомогательные функции ----------
@@ -77,11 +80,9 @@ async def log_action(message: discord.Message, reason: str, action: str = "Уд�
         pass
 
 def contains_any_link(text: str) -> bool:
-    """Проверяет, есть ли в тексте любая ссылка."""
     return bool(URL_PATTERN.search(text))
 
 def contains_banned_domain(text: str) -> bool:
-    """Оставляем для совместимости (можно удалить, если не нужно)."""
     urls = URL_PATTERN.findall(text.lower())
     for url in urls:
         for domain in banned_domains:
@@ -103,12 +104,11 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Проверяем, что сообщение в одном из модерируемых каналов
     if message.channel.id not in MOD_CHANNEL_IDS:
         await bot.process_commands(message)
         return
 
-    # Если у пользователя есть роль администратора, пропускаем
+    # Если у пользователя есть роль администратора (по ID), пропускаем
     if ADMIN_ROLE_ID != 0:
         role = message.guild.get_role(ADMIN_ROLE_ID)
         if role and role in message.author.roles:
@@ -118,10 +118,8 @@ async def on_message(message: discord.Message):
     content = message.content
     reason = None
 
-    # ---- НОВАЯ ПРОВЕРКА: любая ссылка ----
     if contains_any_link(content):
         reason = "Публикация ссылки (запрещено)"
-    # ---- Остальные проверки (можно оставить, но они уже не нужны) ----
     elif contains_banned_domain(content):
         reason = "Запрещённый домен"
     elif is_invite_link(content):
@@ -157,10 +155,13 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# ---------- Команды для управления доменами (оставляем) ----------
-@bot.tree.command(name="add_domain", description="Добавить домен в чёрный список (только админ)")
-@app_commands.default_permissions(administrator=True)
+# ---------- КОМАНДЫ (доступны только владельцу) ----------
+@bot.tree.command(name="add_domain", description="Добавить домен в чёрный список (только владелец)")
 async def add_domain(interaction: discord.Interaction, domain: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ Только владелец бота может использовать эту команду.", ephemeral=True)
+        return
+
     domain = domain.lower().strip()
     if not domain:
         await interaction.response.send_message("❌ Укажите домен.", ephemeral=True)
@@ -173,9 +174,12 @@ async def add_domain(interaction: discord.Interaction, domain: str):
         f.write(domain + "\n")
     await interaction.response.send_message(f"✅ Домен {domain} добавлен в чёрный список.", ephemeral=True)
 
-@bot.tree.command(name="remove_domain", description="Удалить домен из чёрного списка (только админ)")
-@app_commands.default_permissions(administrator=True)
+@bot.tree.command(name="remove_domain", description="Удалить домен из чёрного списка (только владелец)")
 async def remove_domain(interaction: discord.Interaction, domain: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ Только владелец бота может использовать эту команду.", ephemeral=True)
+        return
+
     domain = domain.lower().strip()
     if domain not in banned_domains:
         await interaction.response.send_message(f"⚠️ Домен {domain} не найден в списке.", ephemeral=True)
@@ -186,9 +190,12 @@ async def remove_domain(interaction: discord.Interaction, domain: str):
             f.write(d + "\n")
     await interaction.response.send_message(f"✅ Домен {domain} удалён из чёрного списка.", ephemeral=True)
 
-@bot.tree.command(name="list_domains", description="Показать список запрещённых доменов")
-@app_commands.default_permissions(administrator=True)
+@bot.tree.command(name="list_domains", description="Показать список запрещённых доменов (только владелец)")
 async def list_domains(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ Только владелец бота может использовать эту команду.", ephemeral=True)
+        return
+
     if not banned_domains:
         await interaction.response.send_message("📭 Список пуст.", ephemeral=True)
         return
@@ -197,7 +204,7 @@ async def list_domains(interaction: discord.Interaction):
         domains_text = domains_text[:1900] + "..."
     await interaction.response.send_message(f"📋 **Запрещённые домены:**\n{domains_text}", ephemeral=True)
 
-# ---------- Веб-сервер для health check (исправлен) ----------
+# ---------- Веб-сервер для health check ----------
 PORT = int(os.getenv('PORT', 8080))
 
 async def health_check(request):
@@ -219,6 +226,7 @@ async def on_ready():
     print(f'✅ Бот {bot.user} запущен!')
     print(f"📌 Модерация активна в каналах: {MOD_CHANNEL_IDS}")
     print(f"📋 Загружено доменов: {len(banned_domains)}")
+    print(f"👑 Владелец: {OWNER_ID}")
     try:
         synced = await bot.tree.sync()
         print(f"🔄 Синхронизировано {len(synced)} команд.")
